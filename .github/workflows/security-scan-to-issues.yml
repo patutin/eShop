@@ -1,0 +1,166 @@
+name: "Security Scan → Issues (CodeQL + NuGet)"
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 3 * * 1" # every Monday at 03:00 UTC
+
+permissions:
+  contents: read
+  security-events: write   # required for CodeQL results upload
+  issues: write            # required to create/update issues
+  pull-requests: read
+
+env:
+  DOTNET_VERSION: "8.0.x"
+  SOLUTION_PATTERN: "**/*.sln"
+
+jobs:
+  scan:
+    name: CodeQL (C#) + NuGet audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: csharp
+          queries: security-and-quality
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.SOLUTION_PATTERN }}
+
+      - name: Build solution
+        run: dotnet build ${{ env.SOLUTION_PATTERN }} -c Release --no-restore
+
+      - name: Run CodeQL analysis (SARIF output)
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:csharp"
+          output: codeql-results.sarif
+          upload: true
+
+      - name: Scan NuGet vulnerabilities (optional)
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+          mkdir -p security-reports
+          > security-reports/nuget.json
+          for csproj in $(git ls-files "*.csproj"); do
+            echo "Scanning $csproj"
+            dotnet list "$csproj" package --vulnerable --include-transitive --format json > "security-reports/$(basename "$csproj").json" || true
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-artifacts
+          path: |
+            codeql-results.sarif
+            security-reports/*.json
+
+  issues:
+    name: Create issues from scan results
+    runs-on: ubuntu-latest
+    needs: scan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: security-artifacts
+          path: artifacts
+
+      - name: Install jq & gh CLI
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+          gh --version || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 1) Create issues from CodeQL SARIF
+      - name: Create issues from CodeQL results
+        run: |
+          set -e
+          SARIF="artifacts/codeql-results.sarif"
+          if [ ! -s "$SARIF" ]; then
+            echo "No SARIF file found. Skipping issue creation."
+            exit 0
+          fi
+
+          # Extract up to 50 findings and create issues
+          jq -c '
+            .runs[].results[]
+            | {ruleId, message: .message.text,
+               file: (.locations[0].physicalLocation.artifactLocation.uri // "unknown"),
+               line: (.locations[0].physicalLocation.region.startLine // 1)}
+          ' "$SARIF" \
+          | head -n 50 \
+          | while read -r item; do
+              RULE=$(echo "$item" | jq -r .ruleId)
+              FILE=$(echo "$item" | jq -r .file)
+              LINE=$(echo "$item" | jq -r .line)
+              MSG=$(echo "$item"  | jq -r .message)
+
+              TITLE="[CodeQL] $RULE at $FILE:$LINE"
+              BODY=$(cat <<EOF
+Automated CodeQL finding.
+
+**Rule**: \`$RULE\`  
+**Location**: \`$FILE:$LINE\`
+
+**Message**:
+$MSG
+
+> Origin: workflow \`${{ github.workflow }}\`, run \`${{ github.run_id }}\`
+
+Please investigate and propose a fix.
+EOF
+)
+
+              # Avoid duplicates by checking for an existing issue with the same title
+              EXIST=$(gh api "/repos/${{ github.repository }}/issues?state=open&per_page=100" \
+                       --jq --arg t "$TITLE" '.[] | select(.title==$t) | .number' | head -n1 || true)
+              if [ -n "$EXIST" ]; then
+                echo "Skipping existing issue #$EXIST: $TITLE"
+                continue
+              fi
+
+              # Create a new issue
+              NEW_URL=$(gh api -X POST "/repos/${{ github.repository }}/issues" \
+                  -f title="$TITLE" \
+                  -f body="$BODY" \
+                  -f labels='["security","codeql","ai-generated"]' \
+                  --jq '.html_url')
+              echo "Created: $NEW_URL"
+            done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2) Optionally create issues from NuGet vulnerability scan
+      - name: Create issues from NuGet reports
+        run: |
+          shopt -s nullglob
+          for f in artifacts/security-reports/*.json; do
+            COUNT=$(jq '[.. | objects | select(has("severity")) | select(.severity=="High" or .severity=="Critical")] | length' "$f")
+            if [ "$COUNT" -gt 0 ]; then
+              TITLE="[NuGet] High/Critical vulnerabilities in $(basename "$f")"
+              BODY="Auto-generated from \`dotnet list package --vulnerable\`.\n\nFound: $COUNT high/critical advisories.\n\nOrigin: run ${{ github.run_id }}"
+              EXIST=$(gh api "/repos/${{ github.repository }}/issues?state=open&per_page=100" \
+                       --jq --arg t "$TITLE" '.[] | select(.title==$t) | .number' | head -n1 || true)
+              if [ -z "$EXIST" ]; then
+                URL=$(gh api -X POST "/repos/${{ github.repository }}/issues" \
+                      -f title="$TITLE" -f body="$BODY" \
+                      -f labels='["security","nuget","ai-generated"]' --jq '.html_url')
+                echo "Created: $URL"
+              else
+                echo "Skipping existing issue #$EXIST: $TITLE"
+              fi
+            fi
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
