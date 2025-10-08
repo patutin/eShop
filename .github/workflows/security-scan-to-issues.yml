@@ -108,19 +108,19 @@ jobs:
 
               TITLE="[CodeQL] $RULE at $FILE:$LINE"
               BODY=$(cat <<EOF
-Automated CodeQL finding.
+            Automated CodeQL finding.
 
-**Rule**: \`$RULE\`  
-**Location**: \`$FILE:$LINE\`
+            **Rule**: \`$RULE\`  
+            **Location**: \`$FILE:$LINE\`
 
-**Message**:
-$MSG
+            **Message**:
+            $MSG
 
-> Origin: workflow \`${{ github.workflow }}\`, run \`${{ github.run_id }}\`
+            > Origin: workflow \`${{ github.workflow }}\`, run \`${{ github.run_id }}\`
 
-Please investigate and propose a fix.
-EOF
-)
+            Please investigate and propose a fix.
+            EOF
+            )
 
               # Avoid duplicates by checking for an existing issue with the same title
               EXIST=$(gh api "/repos/${{ github.repository }}/issues?state=open&per_page=100" \
