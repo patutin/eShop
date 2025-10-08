@@ -129,6 +129,50 @@ Notes:
   - Report any issues to [azure-dev](https://github.com/Azure/azure-dev/issues) repo.
   - [FAQ and troubleshoot](https://learn.microsoft.com/azure/developer/azure-developer-cli/troubleshoot?tabs=Browser) for azd.
 
+## Security
+
+### Updating Vulnerable NuGet Packages
+
+This repository includes scripts to help identify and update NuGet packages with known security vulnerabilities:
+
+- **UpdateVulnerableNugets.ps1** - PowerShell script for comprehensive vulnerability scanning and updating
+- **UpdateVulnerableNugets.bat** - Windows batch wrapper for the PowerShell script
+- **UpdateVulnerableNugets.sh** - Linux/macOS shell wrapper for the PowerShell script
+
+#### Usage
+
+**PowerShell (Cross-platform):**
+```powershell
+./UpdateVulnerableNugets.ps1                    # Scan and update vulnerable packages
+./UpdateVulnerableNugets.ps1 -DryRun           # Preview what would be updated
+./UpdateVulnerableNugets.ps1 -Force            # Update all vulnerabilities regardless of severity
+```
+
+**Windows:**
+```cmd
+UpdateVulnerableNugets.bat
+UpdateVulnerableNugets.bat -DryRun
+```
+
+**Linux/macOS:**
+```bash
+./UpdateVulnerableNugets.sh
+./UpdateVulnerableNugets.sh -DryRun
+```
+
+#### Prerequisites
+
+- .NET SDK (matching the version specified in global.json)
+- PowerShell Core (pwsh) - recommended for cross-platform support
+
+The script works with the centralized package management system (Directory.Packages.props) used in this project and will automatically restore packages after updates.
+
+For detailed documentation, troubleshooting, and advanced usage, see [docs/UpdateVulnerableNugets.md](docs/UpdateVulnerableNugets.md).
+
+#### Automated Updates
+
+This repository also uses [Dependabot](https://docs.github.com/en/code-security/dependabot) for automated dependency updates. See `.github/dependabot.yml` for configuration details.
+
 ## Contributing
 
 For more information on contributing to this repo, read [the contribution documentation](./CONTRIBUTING.md) and [the Code of Conduct](CODE-OF-CONDUCT.md).
